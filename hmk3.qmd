@@ -1,0 +1,389 @@
+---
+title: "Hmk3"
+anthor: "Ziyi Tao"
+format: 
+  html:
+    code-fold: true
+    code-tools: true
+    embed-resources: true
+toc: true
+---
+
+Github: <https://github.com/t-aozy/Hmk3-STAT506>
+
+## Problem 1
+
+### a. Download file, merge data
+
+After merge the two data sets, the sample size is 6980.
+
+```{r}
+library(foreign)
+data_vix <- read.xport("D:/VIX_D.XPT")
+data_demod <- read.xport("D:/DEMO_D.XPT")
+```
+
+```{r}
+# merge data
+data_merge <- merge(data_vix, data_demod, by = "SEQN")
+
+# print sample size
+cat("sample size after merge:", nrow(data_merge))
+
+```
+
+### b. Proportion of respondents within 10-year age bracket
+
+VIQ220 : Do you wear glasses or contact lenses for distance vision, such as when you watch television?
+
+VIQ220 in the data frame is a suitable variable to calculate the proportion, however, there are 433 data missing and also some people choose "Don't know(9)" when being asked the question. So I filter people answer "Don't know" and missing data.
+
+Also, there are 148 missing data in terms of variable Age, the youngest individual is 144 months, older than 10 years old, so when calculating proportion, there is no need to calculate 0-10 years old bracket.
+
+```{r}
+library(knitr)
+summary(data_merge$RIDAGEMN)
+```
+
+```{r}
+# drop missing values
+data_merge <- data_merge[data_merge$VIQ220!=9,]
+data_merge <- data_merge[!(is.na(data_merge$VIQ220)==TRUE|
+                          is.na(data_merge$RIDAGEMN)==TRUE),]
+
+
+# apply function
+#' Proportion calculte the proportion that VIQ220 = 1(people who wear glasses)
+#' @param x  data from a certain age group
+#' @return proportion of people wear glasses
+proportion <- function(x){
+  prop <- nrow(x[x$VIQ220 == 1,])/nrow(x)
+  return(prop)
+}
+
+# split into age groups
+data_merge$agegroup <- cut(data_merge$RIDAGEMN, 
+                           breaks = c(120, 240, 360, 480, 
+                                      600, 720, 840, 960, 1080), 
+                           labels = c("10-20", "20-30", "30-40",
+                                      "40-50", "50-60", "60-70", 
+                                      "70-80", "80-90")
+                           )
+data_merge$agegroup <- as.character(data_merge$agegroup)
+
+# use kable
+kable(
+      tapply(data_merge, data_merge$agegroup, proportion),
+      col.names = c("Age Group", "Proportion"),
+      align = c("c","c"),
+      digits = 3
+      )
+
+```
+
+### c. Fit models
+
+```{r}
+# clean data
+#(1 yes, 2 No)->(0 yes, 1 No)
+data_merge$VIQ220 <- data_merge$VIQ220-1 
+#turn race into factor
+data_merge$RIDRETH1 <- as.factor(data_merge$RIDRETH1) 
+#turn gender into factor (1 male,2 female)->(0 male 1 female)
+data_merge$RIAGENDR <- as.factor(data_merge$RIAGENDR-1) 
+
+
+
+model_1 <- glm(VIQ220~RIDAGEMN, 
+               data = data_merge, 
+               family = binomial(link = "logit"))
+
+model_2 <- glm(VIQ220~RIDAGEMN+RIDRETH1+RIAGENDR, 
+              data = data_merge, 
+              family = binomial(link = "logit"))
+
+model_3 <- glm(VIQ220~RIDAGEMN+RIDRETH1+RIAGENDR+INDFMPIR, 
+              data = data_merge, 
+              family = binomial(link = "logit"))
+
+```
+
+```{r}
+library(DescTools)
+library(dplyr)
+
+# get model result
+m3_res <- as.data.frame(cbind(ODDS = t(exp(coef(model_3))),
+                    AIC =  AIC(model_3),
+                    R2 = PseudoR2(model_3),
+                    SAMPLE = df.residual(model_3)+8
+                    ), row.names = "Model 3")
+
+m2_res <- as.data.frame(cbind(ODDS = t(exp(coef(model_2))),
+                    AIC =  AIC(model_2),
+                    R2 = PseudoR2(model_2),
+                    SAMPLE = df.residual(model_2)+7
+                    ), row.names = "Model 2")
+
+m1_res <- as.data.frame(
+              cbind(ODDS = t(exp(coef(model_1))),
+                    AIC =  AIC(model_1),
+                    R2 = PseudoR2(model_1),
+                    SAMPLE = df.residual(model_1)+2
+                    ), 
+              row.names = "Model 1")
+
+df <- as.data.frame(t(bind_rows(m1_res, bind_rows(m2_res, m3_res))))
+rownames(df) <- c("Intercept(Odds)", "Age(Odds)", "AIC", "R2",
+                    "Sample", "Race2(Odds)", "Race3(Odds)", "Race4(Odds)", 
+                    "Race5(Odds)", "Gender1(Odds)", "Poverty(Odds)")
+
+kable(
+      df,
+      align = c("ccc"),
+      digits = 3
+      )
+
+```
+
+### d. Test whether the odds of men and women being wears of glasess differs.
+
+If the odds of men and women being wears of glasses for distance vision differs, the coefficient of gender in model 3 should not equal to 0. According to the result of glht(), the p value is \<0.05, suggesting that the odds of men and women being wears of glasses differs at a = 0.05. Also, prop.test is used to exam the difference of proportion, according to the result, the proportion of wearers of glasses for distance vision differs between men and women at a = 0.05 with male : 63.5%, female 53.2%.
+
+```{r}
+library(multcomp)
+summary(glht(model_3, "RIAGENDR1 = 0"))
+```
+
+```{r}
+# count people in each group
+n1 <- nrow(data_merge[data_merge$RIAGENDR==0,]) #count male
+p1 <- nrow(data_merge[data_merge$RIAGENDR==0 & data_merge$VIQ220==1,]) # male with glasses
+
+n2 <- nrow(data_merge[data_merge$RIAGENDR==1,]) # female
+p2 <- nrow(data_merge[data_merge$RIAGENDR==1 & data_merge$VIQ220==1,]) # female with glasses
+
+prop.test( c(p1, p2), c(n1, n2),alternative = "two.side")
+
+```
+
+## Problem 2
+
+### a. What is the oldest movie?
+
+The oldest movie was released in 2006, there are 1000 movies released in that year.
+
+```{r}
+library(DBI)
+# import data
+data_sakila <- dbConnect(RSQLite :: SQLite(), "D:/sakila_master.db")
+
+dbGetQuery(data_sakila,"
+SELECT COUNT(release_year),  MIN(release_year)
+  FROM film 
+")
+
+```
+
+### b. Least common genre
+
+#### b.1 Regular R Operations
+
+Music movie is the least common in the data, there are 51 movies in this genre.
+
+```{r}
+genre <-  dbGetQuery(data_sakila,"
+SELECT *
+  FROM film_category 
+")
+
+genre_id <-  dbGetQuery(data_sakila,"
+SELECT *
+  FROM category 
+")
+
+genre_merge <- merge(genre, genre_id, by = "category_id")
+
+
+kable(
+  table(genre_merge$name)[order(table(genre_merge$name))],
+  col.names = c("Genre", "Freq")
+)
+
+
+```
+
+#### b.2 SQL query
+
+Music movie is the least common in the data, there are 51 movies in this genre.
+
+```{r}
+dbGetQuery(data_sakila,"
+SELECT COUNT(f.category_id) as count, 
+       f.category_id  as id, 
+       c.name as name
+  FROM film_category as f
+      LEFT JOIN
+      (SELECT *
+         FROM category
+      ) as c ON c.category_id = f.category_id
+  GROUP BY f.category_id
+  ORDER BY count
+")
+```
+
+### c. Identity country with 13 customers.
+
+#### c.1 Regular R Operations
+
+Argentina and Nigeria have exactly 13 customers.
+
+```{r}
+# import customer, address, city, contry data
+customer <- dbGetQuery(data_sakila,"
+SELECT *
+  FROM customer 
+")
+address <- dbGetQuery(data_sakila,"
+SELECT *
+  FROM address 
+")
+city <- dbGetQuery(data_sakila,"
+SELECT *
+  FROM city 
+")
+country <- dbGetQuery(data_sakila,"
+SELECT *
+  FROM country 
+")
+
+
+# merge data
+data_country_merge <- 
+  merge(
+    merge(
+          merge(customer, address, by = "address_id")
+          ,city, by = "city_id"
+          ),
+    country, by = "country_id"
+  )
+
+# count
+country_count <- as.data.frame(table(data_country_merge$country))
+names(country_count) <- c("country", "customer")
+country_count[country_count$customer == 13,]
+
+```
+
+#### c.2 SQL query
+
+Argentina and Nigeria have exactly 13 customers.
+
+```{r}
+dbGetQuery(data_sakila,"
+SELECT  c.address_id as address, 
+        COUNT(c.customer_id) as count_customer, country.country
+    FROM customer as c
+    
+    LEFT JOIN(
+      SELECT *
+        FROM address
+    ) AS a ON a.address_id = c.address_id
+    LEFT JOIN(
+      SELECT *
+        FROM city 
+    )AS city ON city.city_id = a.city_id
+    LEFT JOIN(
+      SELECT *
+        FROM country
+    ) AS country on country.country_id = city.country_id
+    
+  GROUP BY country.country
+  HAVING count_customer ==13
+  
+")
+
+```
+
+## Problem 3
+
+### a. ".com" Email address
+
+73.2% email addresses are hosted at a domain with TLD ".com".
+
+```{r}
+data_us <- read.csv("D:/us-500/us-500.csv")
+data_com <- data_us[grepl("\\.com$", data_us$email),]
+
+cat("proportion:", nrow(data_com)/nrow(data_us))
+
+```
+
+### b. At least one non alphanumeric character
+
+24.8% email addresses have at least one none alphanumeric character in them.
+
+```{r}
+n_special <- length(data_us$email[grep("[^0-9a-zA-Z@\\.]", data_us$email)])
+n_special/nrow(data_us)
+```
+
+### c. Top 5 common area code
+
+TOP 5 common area code: 973 212 215 410 201
+
+```{r}
+
+#' sub extract the first 3 numbers
+#' @param x phone number
+#' @return first 3 numbers
+subsub <- function(x){
+  return(substr(x, 1, 3))
+}
+
+
+# extract area code
+data_us$area_code <-  mapply(subsub, data_us$phone1)
+df <- as.data.frame(table(data_us$area_code))
+names(df) <- c("area_code", "Freq")
+
+
+kable(
+  head(df[order(df$Freq, decreasing = TRUE),])
+)
+
+
+```
+
+### d. Log of the apartment numbers for all addresses.
+
+```{r}
+add_num <- as.integer(regmatches(data_us$address, 
+                                 regexpr("[0-9]+$",
+                                         data_us$address)))
+hist(log(add_num),
+     xlab = "Address Number(LOG)",
+     main = "Histogram of Log(Address Number)"
+     )
+
+```
+
+### e. Benford's Law
+
+According to Benford's Law, leading digit is likely to be small, however, according to the barplot, we don't see decreasing proportion from 1-9, so this data is not real data according to the rule.
+
+```{r}
+string_all <- paste0(as.character(add_num), collapse = "")
+split_all <- strsplit(string_all, "")
+
+# Frequency of each number
+barplot(table(split_all),
+         xlab = "number",
+         ylab = "Frequency")
+
+
+# Proportion of each number
+barplot(table(split_all)/length(split_all[[1]]),
+         xlab = "Number", ylab = "Proportion")
+
+```
